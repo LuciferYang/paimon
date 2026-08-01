@@ -42,14 +42,17 @@ case class RewriteUpsertTable(spark: SparkSession) extends Rule[LogicalPlan] {
       }
 
       p match {
-        case AppendData(target, source, _, _, _, _) =>
+        // Match by type and use named accessors instead of a positional pattern, because the
+        // number of `AppendData` parameters differs across supported Spark versions.
+        case ad: AppendData =>
+          val source = ad.query
           val deduplicatedSource = if (sequenceField.nonEmpty) {
             deduplicateBySequenceField(source, upsertKey, sequenceField)
           } else {
             source
           }
 
-          rewriteToMergeInto(target, deduplicatedSource, upsertKey, sequenceField)
+          rewriteToMergeInto(ad.table, deduplicatedSource, upsertKey, sequenceField)
         case _ => p
       }
   }
