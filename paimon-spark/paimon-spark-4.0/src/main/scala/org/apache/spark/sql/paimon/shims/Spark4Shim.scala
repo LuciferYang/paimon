@@ -37,7 +37,7 @@ import org.apache.spark.sql.catalyst.analysis.{CTESubstitution, SubstituteUnreso
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Expression}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.parser.ParserInterface
-import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Assignment, ColumnDefinition, CTERelationRef, InsertAction, LogicalPlan, MergeAction, MergeIntoTable, MergeRows, SubqueryAlias, TableSpec, UnresolvedWith, UpdateAction}
+import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Assignment, ColumnDefinition, CTERelationRef, DescribeRelation, InsertAction, LogicalPlan, MergeAction, MergeIntoTable, MergeRows, SubqueryAlias, TableSpec, UnresolvedWith, UpdateAction}
 import org.apache.spark.sql.catalyst.plans.logical.MergeRows.Keep
 import org.apache.spark.sql.catalyst.plans.physical.{ClusteredDistribution, Distribution}
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -48,7 +48,7 @@ import org.apache.spark.sql.connector.read.Scan
 import org.apache.spark.sql.connector.write.BatchWrite
 import org.apache.spark.sql.execution.{SparkFormatTable, SparkPlan}
 import org.apache.spark.sql.execution.datasources.{PartitioningAwareFileIndex, PartitionSpec}
-import org.apache.spark.sql.execution.datasources.v2.{AtomicReplaceTableAsSelectExec, AtomicReplaceTableExec, ReplaceTableAsSelectExec, ReplaceTableExec}
+import org.apache.spark.sql.execution.datasources.v2.{AtomicReplaceTableAsSelectExec, AtomicReplaceTableExec, DescribeTableExec, ReplaceTableAsSelectExec, ReplaceTableExec}
 import org.apache.spark.sql.execution.datasources.v2.{DataSourceV2Relation, DataSourceV2ScanRelation}
 import org.apache.spark.sql.execution.streaming.{FileStreamSink, MetadataLogFileIndex}
 import org.apache.spark.sql.internal.SQLConf
@@ -392,6 +392,20 @@ class Spark4Shim extends SparkShim {
       parser: org.apache.spark.sql.catalyst.parser.ParserInterface): Expression =
     org.apache.paimon.spark.catalog.functions.SQLFunctionConverter
       .toSQLFunctionExpression(funcIdent, function, arguments, parser)
+
+  override def describeRelationPartitionSpec(plan: DescribeRelation): Map[String, String] =
+    plan.partitionSpec
+
+  override def createDescribeTableExec(
+      output: Seq[Attribute],
+      catalogName: String,
+      identifier: Identifier,
+      table: Table,
+      isExtended: Boolean): SparkPlan =
+    DescribeTableExec(output, table, isExtended)
+
+  // Spark 4.0's MergeIntoTable has neither needSchemaEvolution nor pendingSchemaChanges.
+  override def mergeNeedsSchemaEvolution(merge: MergeIntoTable): Boolean = false
 }
 
 object Spark4Shim {

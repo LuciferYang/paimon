@@ -37,7 +37,7 @@ import org.apache.spark.sql.catalyst.analysis.{CTESubstitution, SubstituteUnreso
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Expression}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.parser.ParserInterface
-import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Assignment, CTERelationRef, InsertAction, LogicalPlan, MergeAction, MergeIntoTable, SubqueryAlias, TableSpec, UnresolvedWith, UpdateAction}
+import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Assignment, CTERelationRef, DescribeRelation, InsertAction, LogicalPlan, MergeAction, MergeIntoTable, SubqueryAlias, TableSpec, UnresolvedWith, UpdateAction}
 import org.apache.spark.sql.catalyst.plans.physical.Distribution
 // NOTE: `MergeRows` / `MergeRows.Keep` were introduced in Spark 3.4. We access them only via
 // reflection inside the `mergeRowsKeep*` method bodies so that loading `Spark3Shim` does not fail
@@ -52,7 +52,7 @@ import org.apache.spark.sql.connector.read.Scan
 import org.apache.spark.sql.connector.write.BatchWrite
 import org.apache.spark.sql.execution.{SparkFormatTable, SparkPlan}
 import org.apache.spark.sql.execution.datasources.{PartitioningAwareFileIndex, PartitionSpec}
-import org.apache.spark.sql.execution.datasources.v2.{AtomicReplaceTableAsSelectExec, AtomicReplaceTableExec, ReplaceTableAsSelectExec, ReplaceTableExec}
+import org.apache.spark.sql.execution.datasources.v2.{AtomicReplaceTableAsSelectExec, AtomicReplaceTableExec, DescribeTableExec, ReplaceTableAsSelectExec, ReplaceTableExec}
 import org.apache.spark.sql.execution.datasources.v2.{DataSourceV2Relation, DataSourceV2ScanRelation}
 import org.apache.spark.sql.execution.streaming.{FileStreamSink, MetadataLogFileIndex}
 import org.apache.spark.sql.internal.SQLConf
@@ -374,6 +374,20 @@ class Spark3Shim extends SparkShim {
       parser: org.apache.spark.sql.catalyst.parser.ParserInterface): Expression =
     throw new UnsupportedOperationException(
       "SQL user-defined functions (CREATE FUNCTION ... RETURN) require Spark 4.0 or later.")
+
+  override def describeRelationPartitionSpec(plan: DescribeRelation): Map[String, String] =
+    plan.partitionSpec
+
+  override def createDescribeTableExec(
+      output: Seq[Attribute],
+      catalogName: String,
+      identifier: Identifier,
+      table: Table,
+      isExtended: Boolean): SparkPlan =
+    DescribeTableExec(output, table, isExtended)
+
+  // Spark 3.x has no schema evolution for MERGE INTO.
+  override def mergeNeedsSchemaEvolution(merge: MergeIntoTable): Boolean = false
 }
 
 object Spark3Shim {

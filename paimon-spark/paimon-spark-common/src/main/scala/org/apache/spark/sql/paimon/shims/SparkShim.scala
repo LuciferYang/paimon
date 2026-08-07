@@ -32,7 +32,7 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Expression}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.parser.ParserInterface
-import org.apache.spark.sql.catalyst.plans.logical.{Assignment, CTERelationRef, InsertAction, LogicalPlan, MergeAction, MergeIntoTable, SubqueryAlias, TableSpec, UnresolvedWith, UpdateAction}
+import org.apache.spark.sql.catalyst.plans.logical.{Assignment, CTERelationRef, DescribeRelation, InsertAction, LogicalPlan, MergeAction, MergeIntoTable, SubqueryAlias, TableSpec, UnresolvedWith, UpdateAction}
 import org.apache.spark.sql.catalyst.plans.physical.Distribution
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.catalyst.util.ArrayData
@@ -284,4 +284,34 @@ trait SparkShim {
       function: PaimonFunction,
       arguments: Seq[Expression],
       parser: ParserInterface): Expression
+
+  /**
+   * Extracts the partition spec from a `DescribeRelation` node.
+   *
+   * Spark 4.2 (SPARK-39660) removed `partitionSpec` from `DescribeRelation` and introduced a
+   * separate `DescribeTablePartition` plan for `DESCRIBE ... PARTITION`, so on 4.2 this always
+   * returns an empty map.
+   */
+  def describeRelationPartitionSpec(plan: DescribeRelation): Map[String, String]
+
+  /**
+   * Builds a Spark `DescribeTableExec`.
+   *
+   * Spark 4.2 (SPARK-56678) changed the constructor from `(output, table, isExtended)` to
+   * `(output, catalogName, identifier, table, isExtended)`.
+   */
+  def createDescribeTableExec(
+      output: Seq[Attribute],
+      catalogName: String,
+      identifier: Identifier,
+      table: Table,
+      isExtended: Boolean): SparkPlan
+
+  /**
+   * Whether the given `MergeIntoTable` requires schema evolution before rewrite.
+   *
+   * Spark 4.1 exposes this as `needSchemaEvolution`; Spark 4.2 replaced it with
+   * `pendingSchemaChanges`. Spark 3.x and 4.0 have neither.
+   */
+  def mergeNeedsSchemaEvolution(merge: MergeIntoTable): Boolean
 }

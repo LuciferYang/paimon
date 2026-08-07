@@ -197,19 +197,30 @@ case class PaimonStrategy(spark: SparkSession)
     case ShowCreateTable(ResolvedPaimonView(viewCatalog, ident), _, output) =>
       ShowCreatePaimonViewExec(output, viewCatalog, ident) :: Nil
 
-    case DescribeRelation(ResolvedPaimonView(viewCatalog, ident), _, isExtended, output) =>
-      DescribePaimonViewExec(output, viewCatalog, ident, isExtended) :: Nil
+    // `DescribeRelation` has 3 leading fields on Spark <= 4.1 but only 2 on 4.2 (SPARK-39660 moved
+    // `partitionSpec` out into a separate `DescribeTablePartition` plan), so match by type and read
+    // the members through named accessors instead of a positional pattern.
+    case d: DescribeRelation if d.relation.isInstanceOf[ResolvedPaimonView] =>
+      val v = d.relation.asInstanceOf[ResolvedPaimonView]
+      DescribePaimonViewExec(d.output, v.catalog, v.identifier, d.isExtended) :: Nil
 
-    case DescribeRelation(r: ResolvedTable, partitionSpec, isExtended, output) =>
-      (r.table, r.catalog) match {
-        case (sparkTable: SparkTable, sparkCatalog: SparkBaseCatalog) =>
-          PaimonDescribeTableExec(
-            output,
-            sparkCatalog,
-            r.identifier,
-            sparkTable,
-            partitionSpec,
-            isExtended) :: Nil
+    case d: DescribeRelation =>
+      d.relation match {
+        case r: ResolvedTable =>
+          (r.table, r.catalog) match {
+            case (sparkTable: SparkTable, sparkCatalog: SparkBaseCatalog) =>
+              PaimonDescribeTableExec(
+                d.output,
+                sparkCatalog,
+                r.identifier,
+                sparkTable,
+                // Spark 4.2 moved DESCRIBE ... PARTITION out of DescribeRelation; the shim
+                // returns an empty spec there.
+                SparkShimLoader.shim.describeRelationPartitionSpec(d),
+                d.isExtended
+              ) :: Nil
+            case _ => Nil
+          }
         case _ => Nil
       }
 
