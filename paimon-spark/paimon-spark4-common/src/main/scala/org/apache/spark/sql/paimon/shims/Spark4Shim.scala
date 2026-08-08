@@ -371,8 +371,10 @@ class Spark4Shim extends SparkShim {
     org.apache.paimon.spark.catalog.functions.SQLFunctionConverter
       .toSQLFunctionExpression(funcIdent, function, arguments, parser)
 
+  // Spark 4.2 (SPARK-39660) removed partitionSpec from DescribeRelation; DESCRIBE ... PARTITION is
+  // a separate DescribeTablePartition plan there.
   override def describeRelationPartitionSpec(plan: DescribeRelation): Map[String, String] =
-    plan.partitionSpec
+    Map.empty
 
   override def createDescribeTableExec(
       output: Seq[Attribute],
@@ -380,10 +382,10 @@ class Spark4Shim extends SparkShim {
       identifier: Identifier,
       table: Table,
       isExtended: Boolean): SparkPlan =
-    DescribeTableExec(output, table, isExtended)
+    DescribeTableExec(output, catalogName, identifier, table, isExtended)
 
   override def mergeNeedsSchemaEvolution(merge: MergeIntoTable): Boolean =
-    merge.needSchemaEvolution
+    merge.pendingSchemaChanges.nonEmpty
 }
 
 object Spark4Shim {

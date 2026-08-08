@@ -21,7 +21,7 @@ package org.apache.paimon.spark.data
 import org.apache.paimon.spark.AbstractSparkInternalRow
 import org.apache.paimon.types.RowType
 
-import org.apache.spark.unsafe.types.{GeographyVal, GeometryVal, VariantVal}
+import org.apache.spark.unsafe.types.{BinaryView, VariantVal}
 
 class Spark4InternalRow(rowType: RowType) extends AbstractSparkInternalRow(rowType) {
 
@@ -30,9 +30,8 @@ class Spark4InternalRow(rowType: RowType) extends AbstractSparkInternalRow(rowTy
     new VariantVal(v.value(), v.metadata())
   }
 
-  override def getGeography(ordinal: Int): GeographyVal =
-    throw new UnsupportedOperationException("Paimon does not support Geography type")
-
-  override def getGeometry(ordinal: Int): GeometryVal =
-    throw new UnsupportedOperationException("Paimon does not support Geometry type")
+  // Spark 4.2 (SPARK-57058) replaced getGeometry/getGeography on SpecializedGetters with a single
+  // getBinaryView. Paimon has no BinaryView-backed types.
+  override def getBinaryView(ordinal: Int): BinaryView =
+    throw new UnsupportedOperationException("Paimon does not support BinaryView-backed types")
 }
