@@ -91,8 +91,11 @@ case class PaimonDescribeTableExec(
         s"Found ${partition.size} matching partitions. " +
           s"Expected exactly one partition to match the partition spec.")
     }
-    val dummyStorageFormat =
-      CatalogStorageFormat(None, None, None, None, compressed = false, Map.empty)
+    // `CatalogStorageFormat.empty` over the case-class constructor: Spark 4.2 added a 7th
+    // `serdeName` field, so a 6-arg call compiled against 4.2 emits `apply$default$7`, which does
+    // not exist on 3.5/4.0/4.1. The factory is present on every supported version and yields the
+    // same all-empty value (verified by running it against 4.0.3 and 4.2.0).
+    val dummyStorageFormat = CatalogStorageFormat.empty
     val partParameters: Map[String, String] = Map(
       PartitionStatistics.FIELD_FILE_COUNT -> partition.head.fileCount().toString,
       PartitionStatistics.FIELD_FILE_SIZE_IN_BYTES -> partition.head.fileSizeInBytes().toString,
