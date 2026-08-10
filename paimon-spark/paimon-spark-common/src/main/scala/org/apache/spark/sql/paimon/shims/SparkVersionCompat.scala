@@ -21,6 +21,7 @@ package org.apache.spark.sql.paimon.shims
 import org.apache.spark.sql.catalyst.FunctionIdentifier
 import org.apache.spark.sql.catalyst.analysis.UnresolvedFunction
 import org.apache.spark.sql.catalyst.catalog.SessionCatalog
+import org.apache.spark.sql.connector.catalog.{CatalogManager, CatalogPlugin}
 
 /**
  * Reflective accessors for a handful of Spark internals whose *signatures* (not just arity) changed
@@ -35,6 +36,50 @@ import org.apache.spark.sql.catalyst.catalog.SessionCatalog
  * inverted, so `paimon-spark-common` has to resolve such differences itself at runtime.
  */
 object SparkVersionCompat {
+
+  /**
+   * Spark 4.2 turned `CatalogManager` from a class into an interface. Source-compatible, binary
+   * incompatible in *both* directions: the compiler picks `invokevirtual` or `invokeinterface` from
+   * the owner's kind, and the JVM raises `IncompatibleClassChangeError` when the two disagree.
+   * Since `paimon-spark-common` is compiled once against the newest supported Spark and shipped to
+   * every older 4.x runtime, a direct call would break all of them.
+   *
+   * Reflection is immune: only invoke opcodes carry the class/interface distinction, so
+   * `Class.getMethod` resolves the same either way. These four are every `CatalogManager` member
+   * `paimon-spark-common` uses — `tools/spark-binary-compat` fails the build if a fifth appears.
+   */
+  private lazy val currentCatalogMethod = catalogManagerMethod("currentCatalog")
+  private lazy val catalogByNameMethod = catalogManagerMethod("catalog", classOf[String])
+  private lazy val currentNamespaceMethod = catalogManagerMethod("currentNamespace")
+  private lazy val v1SessionCatalogMethod = catalogManagerMethod("v1SessionCatalog")
+
+  private def catalogManagerMethod(name: String, paramTypes: Class[_]*): java.lang.reflect.Method =
+    classOf[CatalogManager].getMethod(name, paramTypes: _*)
+
+  /**
+   * Invokes a `CatalogManager` accessor reflectively, unwrapping the reflection layer so callers
+   * see exactly what a direct call would have thrown. `CatalogManager.catalog` raises
+   * `CatalogNotFoundException` for an unknown name and callers depend on catching it, so letting an
+   * `InvocationTargetException` escape would silently change control flow.
+   */
+  private def invoke[T](method: java.lang.reflect.Method, receiver: CatalogManager, args: Any*): T =
+    try {
+      method.invoke(receiver, args.map(_.asInstanceOf[AnyRef]): _*).asInstanceOf[T]
+    } catch {
+      case e: java.lang.reflect.InvocationTargetException => throw e.getCause
+    }
+
+  def currentCatalog(catalogManager: CatalogManager): CatalogPlugin =
+    invoke[CatalogPlugin](currentCatalogMethod, catalogManager)
+
+  def catalog(catalogManager: CatalogManager, name: String): CatalogPlugin =
+    invoke[CatalogPlugin](catalogByNameMethod, catalogManager, name)
+
+  def currentNamespace(catalogManager: CatalogManager): Array[String] =
+    invoke[Array[String]](currentNamespaceMethod, catalogManager)
+
+  def v1SessionCatalog(catalogManager: CatalogManager): SessionCatalog =
+    invoke[SessionCatalog](v1SessionCatalogMethod, catalogManager)
 
   // Spark 4.2 narrowed `SessionCatalog.isBuiltinFunction` from `FunctionIdentifier` to `String`,
   // dropping the database/catalog qualifier from the lookup. This accessor therefore takes a bare

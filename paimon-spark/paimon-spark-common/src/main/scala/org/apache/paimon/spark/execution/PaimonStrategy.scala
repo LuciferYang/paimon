@@ -56,7 +56,7 @@ import org.apache.spark.sql.execution.datasources.v2.{DataSourceV2Implicits, Dat
 import org.apache.spark.sql.execution.exchange.ShuffleExchangeLike
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BroadcastNestedLoopJoinExec}
 import org.apache.spark.sql.execution.shim.{PaimonCreateTableAsSelectStrategy, PaimonReplaceTableAsSelectStrategy, PaimonReplaceTableStrategy}
-import org.apache.spark.sql.paimon.shims.SparkShimLoader
+import org.apache.spark.sql.paimon.shims.{SparkShimLoader, SparkVersionCompat}
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
@@ -335,7 +335,10 @@ case class PaimonStrategy(spark: SparkSession)
   private object PaimonCatalogAndIdentifier {
     def unapply(identifier: Seq[String]): Option[(TableCatalog, Identifier)] = {
       val catalogAndIdentifier =
-        SparkUtils.catalogAndIdentifier(spark, identifier.asJava, catalogManager.currentCatalog)
+        SparkUtils.catalogAndIdentifier(
+          spark,
+          identifier.asJava,
+          SparkVersionCompat.currentCatalog(catalogManager))
       catalogAndIdentifier.catalog match {
         case paimonCatalog: SparkCatalog =>
           Some((paimonCatalog, catalogAndIdentifier.identifier()))

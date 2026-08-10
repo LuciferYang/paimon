@@ -24,14 +24,47 @@ import org.apache.spark.sql.catalyst.analysis.UnresolvedFunction
 
 class SparkVersionCompatTest extends PaimonSparkTestBase {
 
+  private def catalogManager = spark.sessionState.catalogManager
+
   test("isBuiltinFunction recognizes a Spark builtin across versions") {
-    val catalog = spark.sessionState.catalogManager.v1SessionCatalog
+    val catalog = SparkVersionCompat.v1SessionCatalog(catalogManager)
     assert(SparkVersionCompat.isBuiltinFunction(catalog, "upper"))
   }
 
   test("isBuiltinFunction rejects a non-existent function") {
-    val catalog = spark.sessionState.catalogManager.v1SessionCatalog
+    val catalog = SparkVersionCompat.v1SessionCatalog(catalogManager)
     assert(!SparkVersionCompat.isBuiltinFunction(catalog, "paimon_no_such_fn"))
+  }
+
+  // Spark 4.2 turned `CatalogManager` from a class into an interface, which changes the invoke
+  // opcode a direct call compiles to and makes a 4.2-built classfile unusable on 4.0/4.1. These
+  // four accessors go through reflection to stay version-neutral; the tests assert they return
+  // what a direct call would, so a wrong `Method` lookup cannot pass unnoticed.
+
+  test("currentCatalog matches the session's configured catalog") {
+    // `PaimonSparkTestBase.beforeEach` leaves the session on the `paimon` catalog.
+    assert(SparkVersionCompat.currentCatalog(catalogManager).name() === "paimon")
+  }
+
+  test("catalog looks up a catalog by name") {
+    val byName = SparkVersionCompat.catalog(catalogManager, "paimon")
+    assert(byName === SparkVersionCompat.currentCatalog(catalogManager))
+  }
+
+  test("catalog propagates the original failure for an unknown name") {
+    // `SparkUtils.catalogAndIdentifier` relies on catching this to fall back to the default
+    // catalog, so the reflective layer must not wrap it in an InvocationTargetException.
+    val e = intercept[Exception](SparkVersionCompat.catalog(catalogManager, "no_such_catalog"))
+    assert(!e.isInstanceOf[java.lang.reflect.InvocationTargetException])
+    assert(e.getMessage.contains("no_such_catalog"))
+  }
+
+  test("currentNamespace returns the session's namespace") {
+    assert(SparkVersionCompat.currentNamespace(catalogManager).toSeq === Seq("test"))
+  }
+
+  test("v1SessionCatalog returns a usable SessionCatalog") {
+    assert(SparkVersionCompat.v1SessionCatalog(catalogManager).databaseExists("default"))
   }
 
   test("ignoreNulls reads false for a plain UnresolvedFunction") {

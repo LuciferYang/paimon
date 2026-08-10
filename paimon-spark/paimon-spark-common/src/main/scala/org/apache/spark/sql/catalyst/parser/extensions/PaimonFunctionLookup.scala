@@ -80,11 +80,13 @@ case class PaimonFunctionLookup(catalogManager: CatalogManager) extends LookupCa
   def isSparkBuiltInFunction(funcName: String): Boolean = {
     // Takes a bare name, not a FunctionIdentifier: see SparkVersionCompat.isBuiltinFunction —
     // the qualifier is not part of the question on any version.
-    SparkVersionCompat.isBuiltinFunction(catalogManager.v1SessionCatalog, funcName)
+    SparkVersionCompat.isBuiltinFunction(
+      SparkVersionCompat.v1SessionCatalog(catalogManager),
+      funcName)
   }
 
   def isSparkTmpFunc(funcIdent: FunctionIdentifier): Boolean = {
-    catalogManager.v1SessionCatalog.isTemporaryFunction(funcIdent)
+    SparkVersionCompat.v1SessionCatalog(catalogManager).isTemporaryFunction(funcIdent)
   }
 }
 
