@@ -34,10 +34,12 @@ import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.CTESubstitution
+import org.apache.spark.sql.catalyst.analysis.NamedRelation
+import org.apache.spark.sql.catalyst.catalog.CatalogStorageFormat
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Expression}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.parser.ParserInterface
-import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Assignment, ColumnDefinition, CTERelationRef, DescribeRelation, InsertAction, LogicalPlan, MergeAction, MergeIntoTable, MergeRows, SubqueryAlias, TableSpec, UnresolvedWith, UpdateAction}
+import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Assignment, ColumnDefinition, CTERelationRef, DescribeRelation, InsertAction, LogicalPlan, MergeAction, MergeIntoTable, MergeRows, OverwriteByExpression, OverwritePartitionsDynamic, SubqueryAlias, TableSpec, UnresolvedWith, UpdateAction}
 import org.apache.spark.sql.catalyst.plans.logical.MergeRows.{Copy, Insert, Keep, Update}
 import org.apache.spark.sql.catalyst.plans.physical.{ClusteredDistribution, Distribution}
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -48,7 +50,7 @@ import org.apache.spark.sql.connector.read.Scan
 import org.apache.spark.sql.connector.write.BatchWrite
 import org.apache.spark.sql.execution.{SparkFormatTable, SparkPlan}
 import org.apache.spark.sql.execution.datasources.{PartitioningAwareFileIndex, PartitionSpec}
-import org.apache.spark.sql.execution.datasources.v2.{AtomicReplaceTableAsSelectExec, AtomicReplaceTableExec, DescribeTableExec, ReplaceTableAsSelectExec, ReplaceTableExec}
+import org.apache.spark.sql.execution.datasources.v2.{AtomicReplaceTableAsSelectExec, AtomicReplaceTableExec, CreateTableAsSelectExec, DescribeTableExec, ReplaceTableAsSelectExec, ReplaceTableExec}
 import org.apache.spark.sql.execution.datasources.v2.{DataSourceV2Relation, DataSourceV2ScanRelation}
 import org.apache.spark.sql.execution.streaming.runtime.MetadataLogFileIndex
 import org.apache.spark.sql.execution.streaming.sinks.FileStreamSink
@@ -56,6 +58,7 @@ import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{DataTypes, StructType, VariantType}
 import org.apache.spark.unsafe.types.VariantVal
 
+import java.net.URI
 import java.util.{Map => JMap}
 
 class Spark4Shim extends SparkShim {
@@ -93,6 +96,47 @@ class Spark4Shim extends SparkShim {
       properties: JMap[String, String]): Table = {
     val columns = CatalogV2Util.structTypeToV2Columns(schema)
     tableCatalog.createTable(ident, columns, partitions, properties)
+  }
+
+  override def withStorageLocation(
+      storage: CatalogStorageFormat,
+      locationUri: Option[URI]): CatalogStorageFormat =
+    storage.copy(locationUri = locationUri)
+
+  override def overwriteByName(
+      table: NamedRelation,
+      query: LogicalPlan,
+      deleteExpr: Expression,
+      writeOptions: Map[String, String]): OverwriteByExpression =
+    OverwriteByExpression.byName(
+      table,
+      query,
+      deleteExpr,
+      writeOptions,
+      withSchemaEvolution = false)
+
+  override def overwritePartitionsDynamicByName(
+      table: NamedRelation,
+      query: LogicalPlan,
+      writeOptions: Map[String, String]): OverwritePartitionsDynamic =
+    OverwritePartitionsDynamic.byName(table, query, writeOptions, withSchemaEvolution = false)
+
+  override def createCreateTableAsSelectExec(
+      catalog: TableCatalog,
+      ident: Identifier,
+      partitioning: Seq[Transform],
+      query: LogicalPlan,
+      tableSpec: TableSpec,
+      writeOptions: Map[String, String],
+      ifNotExists: Boolean): SparkPlan = {
+    CreateTableAsSelectExec(
+      catalog,
+      ident,
+      partitioning,
+      query,
+      tableSpec,
+      writeOptions,
+      ifNotExists)
   }
 
   override def createReplaceTableAsSelectExec(

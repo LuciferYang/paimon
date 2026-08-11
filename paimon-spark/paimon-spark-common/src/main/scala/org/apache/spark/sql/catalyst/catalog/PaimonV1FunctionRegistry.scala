@@ -164,7 +164,16 @@ case class PaimonV1FunctionRegistry(session: SparkSession) extends SQLConfHelper
   }
 
   private def qualifyIdentifier(ident: FunctionIdentifier): FunctionIdentifier = {
-    FunctionIdentifier(funcName = format(ident.funcName), database = ident.database)
+    // Carry the catalog through. Spark 4.2's `SimpleFunctionRegistryBase.normalizeFuncName` asserts
+    // the identifier is fully qualified (3-part), so dropping it fails with
+    // "Function identifier must be fully qualified". Callers already supply all three parts (see
+    // `PaimonFunctionLookup.CatalogAndFunctionIdentifier`), and keeping the catalog is also more
+    // correct on older versions: two identically named functions in different catalogs would
+    // otherwise collide in the registry.
+    FunctionIdentifier(
+      funcName = format(ident.funcName),
+      database = ident.database,
+      catalog = ident.catalog)
   }
 
   protected def format(name: String): String = {

@@ -29,10 +29,12 @@ import org.apache.paimon.types.{DataType, RowType}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.FunctionIdentifier
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.analysis.NamedRelation
+import org.apache.spark.sql.catalyst.catalog.CatalogStorageFormat
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Expression}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.parser.ParserInterface
-import org.apache.spark.sql.catalyst.plans.logical.{Assignment, CTERelationRef, DescribeRelation, InsertAction, LogicalPlan, MergeAction, MergeIntoTable, SubqueryAlias, TableSpec, UnresolvedWith, UpdateAction}
+import org.apache.spark.sql.catalyst.plans.logical.{Assignment, CTERelationRef, DescribeRelation, InsertAction, LogicalPlan, MergeAction, MergeIntoTable, OverwriteByExpression, OverwritePartitionsDynamic, SubqueryAlias, TableSpec, UnresolvedWith, UpdateAction}
 import org.apache.spark.sql.catalyst.plans.physical.Distribution
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.catalyst.util.ArrayData
@@ -44,6 +46,7 @@ import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.datasources.v2.{DataSourceV2Relation, DataSourceV2ScanRelation}
 import org.apache.spark.sql.types.StructType
 
+import java.net.URI
 import java.util.{Map => JMap}
 
 /**
@@ -74,6 +77,56 @@ trait SparkShim {
       schema: StructType,
       partitions: Array[Transform],
       properties: JMap[String, String]): Table
+
+  /**
+   * Builds a Spark `CreateTableAsSelectExec`.
+   *
+   * Goes through the shim because Spark 4.2 added an 8th `transaction` parameter. Its type,
+   * `Option[connector.catalog.transactions.Transaction]`, only exists on 4.2, so
+   * `paimon-spark-common` cannot name it; omitting it instead makes the compiler emit
+   * `CreateTableAsSelectExec$.apply$default$8`, which older runtimes do not have. Neither shape
+   * links everywhere, so the construction has to happen in a per-version module — the same reason
+   * `createReplaceTableAsSelectExec` above is a shim method.
+   */
+  /**
+   * Builds `OverwriteByExpression.byName` / `OverwritePartitionsDynamic.byName`.
+   *
+   * Both gained a trailing `withSchemaEvolution: Boolean` in Spark 4.2. Omitting it makes the
+   * compiler emit `byName$default$N`, absent on 3.x/4.0/4.1; naming it does not compile there. As
+   * with `createCreateTableAsSelectExec`, the construction has to live in a per-version module.
+   *
+   * Paimon never evolves the target schema on an overwrite, so on 4.2 these pass `false`.
+   */
+  /**
+   * Returns `storage` with its `locationUri` replaced.
+   *
+   * Spark 4.2 added a 7th `serdeName` field to `CatalogStorageFormat`, so a named-argument `copy`
+   * emits `copy$default$7`, which older runtimes lack. Every version can express the replacement,
+   * but only against its own field count, so the call belongs in a per-version module.
+   */
+  def withStorageLocation(
+      storage: CatalogStorageFormat,
+      locationUri: Option[URI]): CatalogStorageFormat
+
+  def overwriteByName(
+      table: NamedRelation,
+      query: LogicalPlan,
+      deleteExpr: Expression,
+      writeOptions: Map[String, String]): OverwriteByExpression
+
+  def overwritePartitionsDynamicByName(
+      table: NamedRelation,
+      query: LogicalPlan,
+      writeOptions: Map[String, String]): OverwritePartitionsDynamic
+
+  def createCreateTableAsSelectExec(
+      catalog: TableCatalog,
+      ident: Identifier,
+      partitioning: Seq[Transform],
+      query: LogicalPlan,
+      tableSpec: TableSpec,
+      writeOptions: Map[String, String],
+      ifNotExists: Boolean): SparkPlan
 
   def createReplaceTableAsSelectExec(
       catalog: TableCatalog,

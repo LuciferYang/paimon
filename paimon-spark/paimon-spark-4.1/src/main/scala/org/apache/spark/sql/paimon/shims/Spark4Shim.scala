@@ -19,10 +19,10 @@
 package org.apache.spark.sql.paimon.shims
 
 import org.apache.paimon.Snapshot
-import org.apache.paimon.data.variant.Variant
-import org.apache.paimon.spark.catalyst.analysis.Spark3ResolutionRules
-import org.apache.paimon.spark.catalyst.parser.extensions.PaimonSpark3SqlExtensionsParser
-import org.apache.paimon.spark.data.{Spark3ArrayData, Spark3InternalRow, Spark3InternalRowWithBlob, SparkArrayData, SparkInternalRow}
+import org.apache.paimon.data.variant.{GenericVariant, Variant}
+import org.apache.paimon.spark.catalyst.analysis.Spark4ResolutionRules
+import org.apache.paimon.spark.catalyst.parser.extensions.PaimonSpark4SqlExtensionsParser
+import org.apache.paimon.spark.data.{Spark4ArrayData, Spark4InternalRow, Spark4InternalRowWithBlob, SparkArrayData, SparkInternalRow}
 import org.apache.paimon.spark.format.FormatTableBatchWrite
 import org.apache.paimon.spark.rowops.PaimonCopyOnWriteScan
 import org.apache.paimon.spark.write.{PaimonBatchWrite, PaimonDeltaBatchWrite}
@@ -33,22 +33,18 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.analysis.{CTESubstitution, SubstituteUnresolvedOrdinals}
+import org.apache.spark.sql.catalyst.analysis.CTESubstitution
 import org.apache.spark.sql.catalyst.analysis.NamedRelation
 import org.apache.spark.sql.catalyst.catalog.CatalogStorageFormat
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Expression}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.parser.ParserInterface
-import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Assignment, CTERelationRef, DescribeRelation, InsertAction, LogicalPlan, MergeAction, MergeIntoTable, OverwriteByExpression, OverwritePartitionsDynamic, SubqueryAlias, TableSpec, UnresolvedWith, UpdateAction}
-import org.apache.spark.sql.catalyst.plans.physical.Distribution
-// NOTE: `MergeRows` / `MergeRows.Keep` were introduced in Spark 3.4. We access them only via
-// reflection inside the `mergeRowsKeep*` method bodies so that loading `Spark3Shim` does not fail
-// on Spark 3.2 / 3.3 runtimes that still ship `paimon-spark3-common` (the module targets 3.5.8 at
-// compile time but must also run on 3.2 / 3.3).
+import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Assignment, ColumnDefinition, CTERelationRef, DescribeRelation, InsertAction, LogicalPlan, MergeAction, MergeIntoTable, MergeRows, OverwriteByExpression, OverwritePartitionsDynamic, SubqueryAlias, TableSpec, UnresolvedWith, UpdateAction}
+import org.apache.spark.sql.catalyst.plans.logical.MergeRows.{Copy, Insert, Keep, Update}
+import org.apache.spark.sql.catalyst.plans.physical.{ClusteredDistribution, Distribution}
 import org.apache.spark.sql.catalyst.rules.Rule
-import org.apache.spark.sql.catalyst.util.{ArrayData, GeneratedColumn, ResolveDefaultColumns}
-import org.apache.spark.sql.connector.catalog.{Column, Identifier, StagingTableCatalog, Table, TableCatalog}
-import org.apache.spark.sql.connector.catalog.CatalogV2Util.structTypeToV2Columns
+import org.apache.spark.sql.catalyst.util.{ArrayData, GeneratedColumn, IdentityColumn, ResolveDefaultColumns}
+import org.apache.spark.sql.connector.catalog.{CatalogV2Util, Column, Identifier, StagingTableCatalog, Table, TableCatalog}
 import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.connector.read.Scan
 import org.apache.spark.sql.connector.write.BatchWrite
@@ -56,38 +52,40 @@ import org.apache.spark.sql.execution.{SparkFormatTable, SparkPlan}
 import org.apache.spark.sql.execution.datasources.{PartitioningAwareFileIndex, PartitionSpec}
 import org.apache.spark.sql.execution.datasources.v2.{AtomicReplaceTableAsSelectExec, AtomicReplaceTableExec, CreateTableAsSelectExec, DescribeTableExec, ReplaceTableAsSelectExec, ReplaceTableExec}
 import org.apache.spark.sql.execution.datasources.v2.{DataSourceV2Relation, DataSourceV2ScanRelation}
-import org.apache.spark.sql.execution.streaming.{FileStreamSink, MetadataLogFileIndex}
+import org.apache.spark.sql.execution.streaming.runtime.MetadataLogFileIndex
+import org.apache.spark.sql.execution.streaming.sinks.FileStreamSink
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.types.{DataTypes, StructType, VariantType}
+import org.apache.spark.unsafe.types.VariantVal
 
 import java.net.URI
 import java.util.{Map => JMap}
 
-class Spark3Shim extends SparkShim {
+class Spark4Shim extends SparkShim {
 
-  override def classicApi: ClassicApi = new Classic3Api
+  override def classicApi: ClassicApi = new Classic4Api
 
   override def createSparkParser(delegate: ParserInterface): ParserInterface = {
-    new PaimonSpark3SqlExtensionsParser(delegate)
+    new PaimonSpark4SqlExtensionsParser(delegate)
   }
 
   override def createCustomResolution(spark: SparkSession): Rule[LogicalPlan] = {
-    Spark3ResolutionRules(spark)
+    Spark4ResolutionRules(spark)
   }
 
   override def createSparkInternalRow(rowType: RowType): SparkInternalRow = {
-    new Spark3InternalRow(rowType)
+    new Spark4InternalRow(rowType)
   }
 
   override def createSparkInternalRowWithBlob(
       rowType: RowType,
       blobFields: Set[Int],
       blobAsDescriptor: Boolean): SparkInternalRow = {
-    new Spark3InternalRowWithBlob(rowType, blobFields, blobAsDescriptor)
+    new Spark4InternalRowWithBlob(rowType, blobFields, blobAsDescriptor)
   }
 
   override def createSparkArrayData(elementType: DataType): SparkArrayData = {
-    new Spark3ArrayData(elementType)
+    new Spark4ArrayData(elementType)
   }
 
   override def createTable(
@@ -96,8 +94,25 @@ class Spark3Shim extends SparkShim {
       schema: StructType,
       partitions: Array[Transform],
       properties: JMap[String, String]): Table = {
-    tableCatalog.createTable(ident, schema, partitions, properties)
+    val columns = CatalogV2Util.structTypeToV2Columns(schema)
+    tableCatalog.createTable(ident, columns, partitions, properties)
   }
+
+  override def describeRelationPartitionSpec(plan: DescribeRelation): Map[String, String] =
+    plan.partitionSpec
+
+  override def createDescribeTableExec(
+      output: Seq[Attribute],
+      catalogName: String,
+      identifier: Identifier,
+      table: Table,
+      isExtended: Boolean): SparkPlan =
+    DescribeTableExec(output, table, isExtended)
+
+  // Spark 4.1 exposes this as `needSchemaEvolution`; 4.2 replaced it with `pendingSchemaChanges`
+  // and 4.0 has neither.
+  override def mergeNeedsSchemaEvolution(merge: MergeIntoTable): Boolean =
+    merge.needSchemaEvolution
 
   override def withStorageLocation(
       storage: CatalogStorageFormat,
@@ -212,13 +227,12 @@ class Spark3Shim extends SparkShim {
       schemaOrColumns: Any,
       catalog: TableCatalog,
       ident: Identifier): Array[Column] = {
-    val statementType = "CREATE TABLE"
-    val schema = schemaOrColumns.asInstanceOf[StructType]
-    ResolveDefaultColumns.validateCatalogForDefaultValue(schema, catalog, ident)
-    val newSchema =
-      ResolveDefaultColumns.constantFoldCurrentDefaultsToExistDefaults(schema, statementType)
-    GeneratedColumn.validateGeneratedColumns(newSchema, catalog, ident, statementType)
-    structTypeToV2Columns(newSchema)
+    val statementType = "REPLACE TABLE"
+    val columns = schemaOrColumns.asInstanceOf[Seq[ColumnDefinition]]
+    ResolveDefaultColumns.validateCatalogForDefaultValue(columns, catalog, ident)
+    GeneratedColumn.validateGeneratedColumns(tableSchema, catalog, ident, statementType)
+    IdentityColumn.validateIdentityColumn(tableSchema, catalog, ident)
+    columns.map(_.toV2Column(statementType)).toArray
   }
 
   override def copyTableSpec(
@@ -228,7 +242,7 @@ class Spark3Shim extends SparkShim {
     tableSpec.copy(properties = tableSpec.properties ++ additionalProperties, location = location)
   }
 
-  private def invalidateCache(tableCatalog: TableCatalog, table: Table, ident: Identifier): Unit = {
+  private def invalidateCache(tableCatalog: TableCatalog, ident: Identifier): Unit = {
     tableCatalog.invalidateTable(ident)
   }
 
@@ -266,23 +280,28 @@ class Spark3Shim extends SparkShim {
       cteId: Long,
       resolved: Boolean,
       output: Seq[Attribute],
-      isStreaming: Boolean): CTERelationRef =
-    MinorVersionShim.createCTERelationRef(cteId, resolved, output, isStreaming)
+      isStreaming: Boolean): CTERelationRef = {
+    CTERelationRef(cteId, resolved, output.toSeq, isStreaming)
+  }
 
   override def createClusteredDistribution(
       expressions: Seq[Expression],
       numPartitions: Int): Distribution =
-    MinorVersionShim.createClusteredDistribution(expressions, numPartitions)
+    ClusteredDistribution(
+      expressions,
+      requireAllClusterKeys = false,
+      requiredNumPartitions = Some(numPartitions))
 
   override def supportsHashAggregate(
       aggregateBufferAttributes: Seq[Attribute],
-      groupingExpression: Seq[Expression]): Boolean =
-    Aggregate.supportsHashAggregate(aggregateBufferAttributes)
+      groupingExpression: Seq[Expression]): Boolean = {
+    Aggregate.supportsHashAggregate(aggregateBufferAttributes.toSeq, groupingExpression.toSeq)
+  }
 
   override def supportsObjectHashAggregate(
       aggregateExpressions: Seq[AggregateExpression],
       groupByExpressions: Seq[Expression]): Boolean =
-    Aggregate.supportsObjectHashAggregate(aggregateExpressions)
+    Aggregate.supportsObjectHashAggregate(aggregateExpressions.toSeq, groupByExpressions.toSeq)
 
   override def createMergeIntoTable(
       targetTable: LogicalPlan,
@@ -292,17 +311,18 @@ class Spark3Shim extends SparkShim {
       notMatchedActions: Seq[MergeAction],
       notMatchedBySourceActions: Seq[MergeAction],
       withSchemaEvolution: Boolean): MergeIntoTable = {
-    MinorVersionShim.createMergeIntoTable(
+    MergeIntoTable(
       targetTable,
       sourceTable,
       mergeCondition,
       matchedActions,
       notMatchedActions,
-      notMatchedBySourceActions)
+      notMatchedBySourceActions,
+      withSchemaEvolution)
   }
 
   override def notMatchedBySourceActions(merge: MergeIntoTable): Seq[MergeAction] =
-    MinorVersionShim.notMatchedBySourceActions(merge)
+    merge.notMatchedBySourceActions
 
   override def createUpdateAction(
       condition: Option[Expression],
@@ -325,45 +345,32 @@ class Spark3Shim extends SparkShim {
       relation: DataSourceV2ScanRelation,
       scan: Scan,
       output: Seq[AttributeReference]): DataSourceV2ScanRelation = {
-    MinorVersionShim.createDataSourceV2ScanRelation(relation, scan, output)
+    DataSourceV2ScanRelation(relation.relation, scan, output, None, None)
   }
 
   override def createClusteredDistribution(
       expressions: Seq[Expression],
       requiredNumPartitions: Option[Int]): Distribution = {
-    MinorVersionShim.createClusteredDistribution(expressions, requiredNumPartitions)
+    ClusteredDistribution(expressions, requiredNumPartitions = requiredNumPartitions)
   }
 
-  override def earlyBatchRules(): Seq[Rule[LogicalPlan]] =
-    Seq(CTESubstitution, SubstituteUnresolvedOrdinals)
-
-  // Loaded on first call; not referenced from class signatures so Spark3Shim can link on 3.2/3.3.
-  private lazy val keepCompanion: AnyRef = {
-    val cls = Class.forName("org.apache.spark.sql.catalyst.plans.logical.MergeRows$Keep$")
-    cls.getField("MODULE$").get(null)
-  }
-
-  private def buildKeep(condition: Expression, output: Seq[Expression]): AnyRef = {
-    val applyMethod = keepCompanion.getClass.getMethods
-      .find(m => m.getName == "apply" && m.getParameterCount == 2)
-      .getOrElse(throw new NoSuchMethodException(
-        "MergeRows.Keep.apply(Expression, Seq[Expression]) not found — MergeRows requires Spark 3.4+"))
-    applyMethod.invoke(keepCompanion, condition, output)
-  }
+  override def earlyBatchRules(): Seq[Rule[LogicalPlan]] = Seq(CTESubstitution)
 
   override def mergeRowsKeepCopy(condition: Expression, output: Seq[Expression]): AnyRef =
-    buildKeep(condition, output)
+    Keep(Copy, condition, output)
 
   override def mergeRowsKeepUpdate(condition: Expression, output: Seq[Expression]): AnyRef =
-    buildKeep(condition, output)
+    Keep(Update, condition, output)
 
   override def mergeRowsKeepInsert(condition: Expression, output: Seq[Expression]): AnyRef =
-    buildKeep(condition, output)
+    Keep(Insert, condition, output)
 
   override def transformUnresolvedWithCteRelations(
       u: UnresolvedWith,
       transform: SubqueryAlias => SubqueryAlias): UnresolvedWith = {
-    u.copy(cteRelations = u.cteRelations.map { case (name, alias) => (name, transform(alias)) })
+    u.copy(cteRelations = u.cteRelations.map {
+      case (name, alias, depth) => (name, transform(alias), depth)
+    })
   }
 
   override def hasFileStreamSinkMetadata(
@@ -379,7 +386,7 @@ class Spark3Shim extends SparkShim {
       parameters: Map[String, String],
       userSpecifiedSchema: Option[StructType],
       partitionSchema: StructType): PartitioningAwareFileIndex = {
-    new Spark3Shim.PartitionedMetadataLogFileIndex(
+    new Spark4Shim.PartitionedMetadataLogFileIndex(
       sparkSession,
       path,
       parameters,
@@ -387,49 +394,40 @@ class Spark3Shim extends SparkShim {
       partitionSchema)
   }
 
-  override def toPaimonVariant(o: Object): Variant = throw new UnsupportedOperationException()
+  override def toPaimonVariant(o: Object): Variant = {
+    val v = o.asInstanceOf[VariantVal]
+    new GenericVariant(v.getValue, v.getMetadata)
+  }
 
-  override def isSparkVariantType(dataType: org.apache.spark.sql.types.DataType): Boolean = false
+  override def toPaimonVariant(row: InternalRow, pos: Int): Variant = {
+    val v = row.getVariant(pos)
+    new GenericVariant(v.getValue, v.getMetadata)
+  }
 
-  override def SparkVariantType(): org.apache.spark.sql.types.DataType =
-    throw new UnsupportedOperationException()
+  override def toPaimonVariant(array: ArrayData, pos: Int): Variant = {
+    val v = array.getVariant(pos)
+    new GenericVariant(v.getValue, v.getMetadata)
+  }
 
-  override def toPaimonVariant(row: InternalRow, pos: Int): Variant =
-    throw new UnsupportedOperationException()
+  override def isSparkVariantType(dataType: org.apache.spark.sql.types.DataType): Boolean =
+    dataType.isInstanceOf[VariantType]
 
-  override def toPaimonVariant(array: ArrayData, pos: Int): Variant =
-    throw new UnsupportedOperationException()
+  override def SparkVariantType(): org.apache.spark.sql.types.DataType = DataTypes.VariantType
 
-  // SQL UDFs (CREATE FUNCTION ... RETURN ...) are a Spark 4.0+ feature; no-op rule on Spark 3.
+  // SQL UDFs (CREATE FUNCTION ... RETURN ...).
   override def rewritePaimonSQLFunctionCommands(spark: SparkSession): Rule[LogicalPlan] =
-    new Rule[LogicalPlan] {
-      override def apply(plan: LogicalPlan): LogicalPlan = plan
-    }
+    org.apache.spark.sql.catalyst.parser.extensions.RewritePaimonSQLFunctionCommands(spark)
 
   override def resolvePaimonSQLFunction(
       funcIdent: org.apache.spark.sql.catalyst.FunctionIdentifier,
       function: org.apache.paimon.function.Function,
       arguments: Seq[Expression],
       parser: org.apache.spark.sql.catalyst.parser.ParserInterface): Expression =
-    throw new UnsupportedOperationException(
-      "SQL user-defined functions (CREATE FUNCTION ... RETURN) require Spark 4.0 or later.")
-
-  override def describeRelationPartitionSpec(plan: DescribeRelation): Map[String, String] =
-    plan.partitionSpec
-
-  override def createDescribeTableExec(
-      output: Seq[Attribute],
-      catalogName: String,
-      identifier: Identifier,
-      table: Table,
-      isExtended: Boolean): SparkPlan =
-    DescribeTableExec(output, table, isExtended)
-
-  // Spark 3.x has no schema evolution for MERGE INTO.
-  override def mergeNeedsSchemaEvolution(merge: MergeIntoTable): Boolean = false
+    org.apache.paimon.spark.catalog.functions.SQLFunctionConverter
+      .toSQLFunctionExpression(funcIdent, function, arguments, parser)
 }
 
-object Spark3Shim {
+object Spark4Shim {
 
   /** Paimon's partition-aware wrapper over Spark's `MetadataLogFileIndex`. */
   private[shims] class PartitionedMetadataLogFileIndex(
