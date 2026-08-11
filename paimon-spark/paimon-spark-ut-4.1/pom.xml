@@ -32,7 +32,7 @@ under the License.
     <name>Paimon : Spark : UT : 4.1 : ${scala.binary.version}</name>
 
     <!--
-      A second compilation of `paimon-spark-ut`'s test sources, against Spark 4.0.3 instead of the
+      A second compilation of `paimon-spark-ut`'s test sources, against Spark 4.1.2 instead of the
       profile baseline. Owns no sources of its own: `build-helper` adds `../paimon-spark-ut/src/test`
       verbatim, so there is exactly one copy of every test to maintain.
 
@@ -78,8 +78,8 @@ under the License.
         <!--
           `${paimon-sparkx-common}` transitively pulls in `spark-sql-api` at the profile baseline
           (4.2.0), so every Spark artifact is pinned to ${spark.version} here to keep the whole
-          compile classpath on 4.0 — the same reasoning, and the same `spark-connect-shims`
-          exclusions, as `paimon-spark-4.0`: Spark 4.0.3's shims jar carries a stub
+          compile classpath on 4.1 — the same reasoning, and the same `spark-connect-shims`
+          exclusions, as `paimon-spark-4.1`: the shims jar carries a stub
           `org.apache.spark.SparkConf` with only `getAll()`, which scalac resolves in preference to
           spark-core's real one, failing with `value set is not a member of org.apache.spark.SparkConf`.
         -->
@@ -217,8 +217,8 @@ under the License.
             </plugin>
 
             <!-- The tests belong to `paimon-spark-ut`, which already runs them against the baseline.
-                 This module exists only to produce a 4.0-compiled test-jar for the 4.0 and 4.1
-                 modules to consume, so running them a second time here would just double CI time. -->
+                 This module exists only to produce a 4.1-compiled test-jar for the 4.1 module to
+                 consume, so running them a second time here would just double CI time. -->
             <plugin>
                 <groupId>org.scalatest</groupId>
                 <artifactId>scalatest-maven-plugin</artifactId>

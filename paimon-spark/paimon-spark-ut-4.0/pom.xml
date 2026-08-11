@@ -47,8 +47,10 @@ under the License.
       they only apply to `src/main`, and this is a test-jar. Compiling the same sources against
       4.0.3 produces a classfile whose supertype kinds match what 4.0 and 4.1 expect.
 
-      Pinned to the oldest 4.x rather than tracking each: compatibility runs one way only
-      (4.0-compiled loads on 4.1, not the reverse), so one 4.0.3 build serves both.
+      Serves `paimon-spark-4.0` only. Compiling once for the whole 4.x line does not work: the
+      one-directional compatibility that holds for `src/main` (a 4.0-compiled class loads on 4.1)
+      does not hold for test sources, which construct Spark internals directly. See
+      `paimon-spark-ut-4.1/pom.xml`.
     -->
     <properties>
         <spark.version>4.0.3</spark.version>
@@ -215,8 +217,8 @@ under the License.
             </plugin>
 
             <!-- The tests belong to `paimon-spark-ut`, which already runs them against the baseline.
-                 This module exists only to produce a 4.0-compiled test-jar for the 4.0 and 4.1
-                 modules to consume, so running them a second time here would just double CI time. -->
+                 This module exists only to produce a 4.0-compiled test-jar for the 4.0 module to
+                 consume, so running them a second time here would just double CI time. -->
             <plugin>
                 <groupId>org.scalatest</groupId>
                 <artifactId>scalatest-maven-plugin</artifactId>
