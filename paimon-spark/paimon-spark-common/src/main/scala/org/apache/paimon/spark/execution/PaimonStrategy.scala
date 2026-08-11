@@ -197,6 +197,29 @@ case class PaimonStrategy(spark: SparkSession)
     case ShowCreateTable(ResolvedPaimonView(viewCatalog, ident), _, output) =>
       ShowCreatePaimonViewExec(output, viewCatalog, ident) :: Nil
 
+    // Spark 4.2 (SPARK-39660) routes `DESCRIBE ... PARTITION` through its own
+    // `DescribeTablePartition` plan. Intercept it so Paimon tables keep emitting the same rows they
+    // do on 3.x/4.0/4.1; the upstream exec has a different row shape. The shim returns `None` on
+    // every version that lacks the node, where the spec arrives inside `DescribeRelation` below.
+    case p if SparkShimLoader.shim.describeTablePartition(p).isDefined =>
+      val (relation, partitionSpec, isExtended, output) =
+        SparkShimLoader.shim.describeTablePartition(p).get
+      relation match {
+        case r: ResolvedTable =>
+          (r.table, r.catalog) match {
+            case (sparkTable: SparkTable, sparkCatalog: SparkBaseCatalog) =>
+              PaimonDescribeTableExec(
+                output,
+                sparkCatalog,
+                r.identifier,
+                sparkTable,
+                partitionSpec,
+                isExtended) :: Nil
+            case _ => Nil
+          }
+        case _ => Nil
+      }
+
     // `DescribeRelation` has 3 leading fields on Spark <= 4.1 but only 2 on 4.2 (SPARK-39660 moved
     // `partitionSpec` out into a separate `DescribeTablePartition` plan), so match by type and read
     // the members through named accessors instead of a positional pattern.

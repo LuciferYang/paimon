@@ -366,6 +366,25 @@ trait SparkShim {
   def createTableLikeParts(plan: LogicalPlan)
       : Option[(Seq[String], Seq[String], Option[String], Option[String], Map[String, String], Boolean, Boolean)]
 
+  /**
+   * If `plan` is Spark 4.2's `DescribeTablePartition`, returns its relation, resolved partition
+   * spec, `isExtended` flag and output; `None` on 3.x/4.0/4.1 where the node does not exist.
+   *
+   * Spark 4.2 (SPARK-39660) split `DESCRIBE ... PARTITION` out of `DescribeRelation` into this
+   * separate plan. Without intercepting it Paimon tables fall through to the upstream
+   * `DescribeTablePartitionExec`, whose row shape differs from what Paimon emits (one row per
+   * metadata key, versus Paimon's single `Partition Parameters` row plus its `Database` / `Table`
+   * rows and `# Column Not Null` section). The node cannot be named here because
+   * `paimon-spark-common` also compiles against Spark 3.5.
+   *
+   * The spec values are returned already rendered to strings, keyed by partition column name, so
+   * they can be compared against Paimon's own `Partition.spec()` map. `ResolvedPartitionSpec`
+   * stores them as an `InternalRow`, so each field is read according to its declared type — the
+   * same construction upstream's own exec uses.
+   */
+  def describeTablePartition(
+      plan: LogicalPlan): Option[(LogicalPlan, Map[String, String], Boolean, Seq[Attribute])]
+
   def describeRelationPartitionSpec(plan: DescribeRelation): Map[String, String]
 
   /**

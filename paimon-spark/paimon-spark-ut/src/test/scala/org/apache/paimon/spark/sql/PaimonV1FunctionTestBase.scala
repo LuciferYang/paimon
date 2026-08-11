@@ -261,11 +261,19 @@ abstract class PaimonV1FunctionTestBase extends PaimonSparkTestWithRestCatalogBa
              |USING JAR '$testUDFJarPath'
              |""".stripMargin)
 
-      assert(intercept[Exception] {
+      // Spark reworded this in 4.2: `error-conditions.json` dropped the "built-in/temporary"
+      // phrasing in favour of pointing at DROP TEMPORARY FUNCTION. Both mean the same refusal, and
+      // this suite runs on every supported version, so accept either.
+      val dropTempMessage = intercept[Exception] {
         sql(s"""
                |DROP FUNCTION udf_add2
                |""".stripMargin)
-      }.getMessage.contains("udf_add2 is a built-in/temporary function"))
+      }.getMessage
+      assert(
+        dropTempMessage.contains("udf_add2 is a built-in/temporary function") ||
+          dropTempMessage.contains("'DROP FUNCTION' expects a persistent function"),
+        s"unexpected DROP FUNCTION refusal: $dropTempMessage"
+      )
     }
   }
 

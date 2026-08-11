@@ -36,11 +36,12 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.{UnresolvedIdentifier, UnresolvedTableOrView}
 import org.apache.spark.sql.catalyst.analysis.CTESubstitution
 import org.apache.spark.sql.catalyst.analysis.NamedRelation
+import org.apache.spark.sql.catalyst.analysis.ResolvedPartitionSpec
 import org.apache.spark.sql.catalyst.catalog.CatalogStorageFormat
-import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Expression}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Expression, Literal}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.parser.ParserInterface
-import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Assignment, ColumnDefinition, CreateTableLike, CTERelationRef, DescribeRelation, InsertAction, LogicalPlan, MergeAction, MergeIntoTable, MergeRows, OverwriteByExpression, OverwritePartitionsDynamic, SubqueryAlias, TableSpec, UnresolvedWith, UpdateAction}
+import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Assignment, ColumnDefinition, CreateTableLike, CTERelationRef, DescribeRelation, DescribeTablePartition, InsertAction, LogicalPlan, MergeAction, MergeIntoTable, MergeRows, OverwriteByExpression, OverwritePartitionsDynamic, SubqueryAlias, TableSpec, UnresolvedWith, UpdateAction}
 import org.apache.spark.sql.catalyst.plans.logical.MergeRows.{Copy, Insert, Keep, Update}
 import org.apache.spark.sql.catalyst.plans.physical.{ClusteredDistribution, Distribution}
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -435,6 +436,29 @@ class Spark4Shim extends SparkShim {
                 c.ifNotExists,
                 // `STORED AS` lands in `serdeInfo`; Paimon tables cannot honour Hive storage syntax.
                 c.serdeInfo.isDefined))
+          case _ => None
+        }
+      case _ => None
+    }
+
+  override def describeTablePartition(
+      plan: LogicalPlan): Option[(LogicalPlan, Map[String, String], Boolean, Seq[Attribute])] =
+    plan match {
+      case d: DescribeTablePartition =>
+        d.partitionSpec match {
+          case spec: ResolvedPartitionSpec =>
+            // `ResolvedPartitionSpec` holds the values as an `InternalRow`, so read each field by
+            // its declared partition-column type and render it the way Spark's own
+            // `DescribeTablePartitionExec` does. Paimon compares the result against
+            // `Partition.spec()`, which stores plain strings.
+            val partSchema = d.table.schema
+            val values = spec.names.zipWithIndex.map {
+              case (name, i) =>
+                val field = partSchema(name)
+                val value = spec.ident.get(i, field.dataType)
+                name -> Literal(value, field.dataType).toString
+            }
+            Some((d.table, values.toMap, d.isExtended, d.output))
           case _ => None
         }
       case _ => None

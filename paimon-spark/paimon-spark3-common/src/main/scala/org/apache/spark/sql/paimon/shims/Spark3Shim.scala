@@ -420,6 +420,11 @@ class Spark3Shim extends SparkShim {
       : Option[(Seq[String], Seq[String], Option[String], Option[String], Map[String, String], Boolean, Boolean)] =
     None
 
+  // Spark 3.x/4.0/4.1 keep `DESCRIBE ... PARTITION` inside `DescribeRelation`; see
+  // `describeRelationPartitionSpec`.
+  override def describeTablePartition(
+      plan: LogicalPlan): Option[(LogicalPlan, Map[String, String], Boolean, Seq[Attribute])] = None
+
   override def describeRelationPartitionSpec(plan: DescribeRelation): Map[String, String] =
     plan.partitionSpec
 
