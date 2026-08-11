@@ -33,13 +33,14 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.analysis.{UnresolvedIdentifier, UnresolvedTableOrView}
 import org.apache.spark.sql.catalyst.analysis.CTESubstitution
 import org.apache.spark.sql.catalyst.analysis.NamedRelation
 import org.apache.spark.sql.catalyst.catalog.CatalogStorageFormat
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Expression}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
 import org.apache.spark.sql.catalyst.parser.ParserInterface
-import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Assignment, ColumnDefinition, CTERelationRef, DescribeRelation, InsertAction, LogicalPlan, MergeAction, MergeIntoTable, MergeRows, OverwriteByExpression, OverwritePartitionsDynamic, SubqueryAlias, TableSpec, UnresolvedWith, UpdateAction}
+import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Assignment, ColumnDefinition, CreateTableLike, CTERelationRef, DescribeRelation, InsertAction, LogicalPlan, MergeAction, MergeIntoTable, MergeRows, OverwriteByExpression, OverwritePartitionsDynamic, SubqueryAlias, TableSpec, UnresolvedWith, UpdateAction}
 import org.apache.spark.sql.catalyst.plans.logical.MergeRows.{Copy, Insert, Keep, Update}
 import org.apache.spark.sql.catalyst.plans.physical.{ClusteredDistribution, Distribution}
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -417,6 +418,28 @@ class Spark4Shim extends SparkShim {
 
   // Spark 4.2 (SPARK-39660) removed partitionSpec from DescribeRelation; DESCRIBE ... PARTITION is
   // a separate DescribeTablePartition plan there.
+  override def createTableLikeParts(plan: LogicalPlan)
+      : Option[(Seq[String], Seq[String], Option[String], Option[String], Map[String, String], Boolean, Boolean)] =
+    plan match {
+      case c: CreateTableLike =>
+        // Parser-stage rule: the children have not been analyzed yet.
+        (c.name, c.source) match {
+          case (target: UnresolvedIdentifier, source: UnresolvedTableOrView) =>
+            Some(
+              (
+                target.nameParts,
+                source.multipartIdentifier,
+                c.provider,
+                c.location,
+                c.properties,
+                c.ifNotExists,
+                // `STORED AS` lands in `serdeInfo`; Paimon tables cannot honour Hive storage syntax.
+                c.serdeInfo.isDefined))
+          case _ => None
+        }
+      case _ => None
+    }
+
   override def describeRelationPartitionSpec(plan: DescribeRelation): Map[String, String] =
     Map.empty
 

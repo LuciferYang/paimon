@@ -345,6 +345,27 @@ trait SparkShim {
    * separate `DescribeTablePartition` plan for `DESCRIBE ... PARTITION`, so on 4.2 this always
    * returns an empty map.
    */
+  /**
+   * Destructures Spark 4.2's `CreateTableLike` logical plan, or returns `None` on 3.x/4.0/4.1 where
+   * the node does not exist.
+   *
+   * Spark 4.2 (SPARK-51350) taught the parser `CREATE TABLE LIKE` for v2 catalogs and added
+   * `TableCatalog.createTableLike`, whose default implementation throws. Paimon used to intercept
+   * the syntax by catching the `ParseException` Spark raised for a catalog-qualified target; now
+   * that Spark parses it, the fallback never fires and the plan reaches the upstream exec. The node
+   * has to be matched instead, and it cannot be named here because `paimon-spark-common` also
+   * compiles against Spark 3.5.
+   *
+   * Returns the target and source name parts *unresolved*: this runs as a parser rule, before
+   * analysis, so the children are still `UnresolvedIdentifier` / `UnresolvedRelation`. The caller
+   * resolves them the same way it does for the V1 command.
+   *
+   * Returns (targetNameParts, sourceNameParts, provider, location, properties, ifNotExists,
+   * hasHiveStorageSyntax).
+   */
+  def createTableLikeParts(plan: LogicalPlan)
+      : Option[(Seq[String], Seq[String], Option[String], Option[String], Map[String, String], Boolean, Boolean)]
+
   def describeRelationPartitionSpec(plan: DescribeRelation): Map[String, String]
 
   /**

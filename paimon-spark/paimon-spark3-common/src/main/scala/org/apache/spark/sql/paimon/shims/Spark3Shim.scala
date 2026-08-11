@@ -414,6 +414,12 @@ class Spark3Shim extends SparkShim {
     throw new UnsupportedOperationException(
       "SQL user-defined functions (CREATE FUNCTION ... RETURN) require Spark 4.0 or later.")
 
+  // Spark 4.0/4.1 have no `CreateTableLike` logical plan; `CREATE TABLE LIKE` still arrives as the
+  // V1 `CreateTableLikeCommand`, which `RewriteCreateTableLikeCommand` matches directly.
+  override def createTableLikeParts(plan: LogicalPlan)
+      : Option[(Seq[String], Seq[String], Option[String], Option[String], Map[String, String], Boolean, Boolean)] =
+    None
+
   override def describeRelationPartitionSpec(plan: DescribeRelation): Map[String, String] =
     plan.partitionSpec
 
