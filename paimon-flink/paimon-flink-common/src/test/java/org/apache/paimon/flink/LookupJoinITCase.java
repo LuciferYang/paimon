@@ -22,6 +22,7 @@ import org.apache.paimon.data.BlobDescriptor;
 import org.apache.paimon.flink.FlinkConnectorOptions.LookupCacheMode;
 import org.apache.paimon.utils.BlockingIterator;
 
+import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.planner.factories.TestValuesTableFactory;
 import org.apache.flink.types.Row;
 import org.junit.jupiter.api.Test;
@@ -143,6 +144,8 @@ public class LookupJoinITCase extends CatalogITCaseBase {
             // only exists in the files before the compaction
             sql("ALTER TABLE AGG_DIM SET ('write-only' = 'true')");
             sql("DELETE FROM AGG_DIM WHERE i = 1");
+            // wait for the compaction job
+            tEnv.getConfig().set(TableConfigOptions.TABLE_DML_SYNC, true);
             sql("CALL sys.compact(`table` => 'default.AGG_DIM')");
             assertThat(sql("SELECT level, record_count FROM `AGG_DIM$files`"))
                     .containsExactly(Row.of(5, 1L));
