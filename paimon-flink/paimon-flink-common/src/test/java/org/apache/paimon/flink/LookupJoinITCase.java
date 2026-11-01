@@ -115,6 +115,48 @@ public class LookupJoinITCase extends CatalogITCaseBase {
         iterator.close();
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void testLookupJoinDeletionPropagationAfterCompaction(boolean fullCompaction)
+            throws Exception {
+        sql(
+                "CREATE TABLE AGG_DIM (i INT PRIMARY KEY NOT ENFORCED, cnt BIGINT) WITH ("
+                        + "'merge-engine' = 'aggregation', "
+                        + "'fields.cnt.aggregate-function' = 'sum', "
+                        + "'aggregation.remove-record-on-delete' = 'true', "
+                        + "'force-lookup' = 'true', "
+                        + "'changelog-producer' = 'none', "
+                        + "'lookup.cache' = 'full', "
+                        + "'continuous.discovery-interval' = '1 ms')");
+        sql("INSERT INTO AGG_DIM VALUES (1, 10), (2, 20)");
+
+        String query =
+                "SELECT T.i, D.cnt FROM T LEFT JOIN AGG_DIM FOR SYSTEM_TIME AS OF T.proctime AS D "
+                        + "ON T.i = D.i";
+        BlockingIterator<Row, Row> iterator = BlockingIterator.of(sEnv.executeSql(query).collect());
+
+        sql("INSERT INTO T VALUES (1), (2)");
+        assertThat(iterator.collect(2)).containsExactlyInAnyOrder(Row.of(1, 10L), Row.of(2, 20L));
+
+        if (fullCompaction) {
+            // keep the delete in level 0, then a full compaction drops the row, which then
+            // only exists in the files before the compaction
+            sql("ALTER TABLE AGG_DIM SET ('write-only' = 'true')");
+            sql("DELETE FROM AGG_DIM WHERE i = 1");
+            sql("CALL sys.compact(`table` => 'default.AGG_DIM')");
+            assertThat(sql("SELECT level, record_count FROM `AGG_DIM$files`"))
+                    .containsExactly(Row.of(5, 1L));
+        } else {
+            // the delete job compacts into an intermediate level and keeps the delete record
+            sql("DELETE FROM AGG_DIM WHERE i = 1");
+        }
+        Thread.sleep(2000); // wait compact-delta refresh
+
+        sql("INSERT INTO T VALUES (1), (2)");
+        assertThat(iterator.collect(2)).containsExactlyInAnyOrder(Row.of(1, null), Row.of(2, 20L));
+        iterator.close();
+    }
+
     @Test
     public void testLookupIgnoreScanOptions() throws Exception {
         sql(
