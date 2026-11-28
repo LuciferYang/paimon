@@ -18,14 +18,16 @@
 
 package org.apache.spark.sql.execution
 
+import org.apache.paimon.options.Options
 import org.apache.paimon.partition.PartitionStatistics
 import org.apache.paimon.spark.SparkTable
 import org.apache.paimon.spark.catalog.SparkBaseCatalog
 import org.apache.paimon.spark.catalyst.Compatibility
 import org.apache.paimon.spark.leafnode.PaimonLeafV2CommandExec
 import org.apache.paimon.spark.util.PartitionStatisticsDisplay
-import org.apache.paimon.spark.utils.CatalogUtils.checkNamespace
+import org.apache.paimon.spark.utils.CatalogUtils.{checkNamespace, toIdentifier}
 import org.apache.paimon.table.FileStoreTable
+import org.apache.paimon.table.source.snapshot.TimeTravelUtil
 
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.{NoSuchPartitionException, ResolvedPartitionSpec}
@@ -36,6 +38,8 @@ import org.apache.spark.sql.catalyst.util.CharVarcharUtils
 import org.apache.spark.sql.connector.catalog.Identifier
 import org.apache.spark.sql.execution.datasources.v2.DescribeTableExec
 import org.apache.spark.sql.types.{StringType, StructType}
+
+import java.util.Collections
 
 import scala.collection.JavaConverters._
 import scala.collection.immutable.ListMap
@@ -77,19 +81,39 @@ case class PaimonDescribeTableExec(
 
   /**
    * The partition's statistics, found by value. A FileStoreTable reports them for every partition
-   * it holds. Another table, e.g. `t$audit_log`, reports none, so its partition must be one the
-   * table lists.
+   * it holds data of. A partition without them must be one the catalog or the table lists, e.g. a
+   * partition of `t$audit_log`.
    */
   private def loadPartitionMetadata(spec: ResolvedPartitionSpec): Map[String, String] = {
     val metadata = table.loadPartitionMetadata(spec.ident).asScala.toMap
-    if (
-      metadata.isEmpty && (table.table.isInstanceOf[FileStoreTable] ||
-        table.listPartitionIdentifiers(spec.names.toArray, spec.ident).isEmpty)
-    ) {
+    val listed = metadata.nonEmpty || (table.table match {
+      case fileStoreTable: FileStoreTable => isRegistered(fileStoreTable, spec)
+      case _ => table.listPartitionIdentifiers(spec.names.toArray, spec.ident).nonEmpty
+    })
+    if (!listed) {
       throw new NoSuchPartitionException(identifier.toString, spec.ident, table.partitionSchema)
     }
     metadata
   }
+
+  /**
+   * Whether the catalog lists the partition, as a REST catalog lists one registered before its
+   * first write. Asked only for a table partitioned in the metastore, and not under time travel:
+   * the catalog lists the partitions of the current snapshot.
+   */
+  private def isRegistered(fileStoreTable: FileStoreTable, spec: ResolvedPartitionSpec): Boolean =
+    fileStoreTable.coreOptions().partitionedTableInMetastore() &&
+      !TimeTravelUtil.hasTimeTravelOptions(Options.fromMap(fileStoreTable.options())) &&
+      table.catalogPartitionSpec(spec.ident).exists {
+        partitionSpec =>
+          catalog
+            .paimonCatalog()
+            .listPartitionsByNames(
+              toIdentifier(identifier, catalog.name()),
+              Collections.singletonList(partitionSpec))
+            .asScala
+            .exists(_.spec() == partitionSpec)
+      }
 
   private def describeFormattedDetailedPartitionInfo(
       spec: ResolvedPartitionSpec,

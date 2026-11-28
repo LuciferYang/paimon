@@ -18,8 +18,11 @@
 
 package org.apache.paimon.spark.sql
 
+import org.apache.paimon.catalog.Identifier
 import org.apache.paimon.partition.PartitionStatistics
+import org.apache.paimon.schema.Schema
 import org.apache.paimon.spark.PaimonSparkTestBase
+import org.apache.paimon.types.DataTypes
 
 import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.catalyst.analysis.NoSuchPartitionException
@@ -285,6 +288,32 @@ abstract class DescribeTableTestBase extends PaimonSparkTestBase {
       assert(recordCountOf(blank) == 1, blank)
       val nullValue = partitionDetailsOf("DESCRIBE FORMATTED dp_binary PARTITION (p = NULL)")
       assert(recordCountOf(nullValue) == 2, nullValue)
+    }
+  }
+
+  test("Paimon describe: a timestamp partition matches only its stored value") {
+    withTable("dp_millis") {
+      paimonCatalog.createTable(
+        Identifier.create(dbName0, "dp_millis"),
+        Schema
+          .newBuilder()
+          .column("id", DataTypes.INT())
+          .column("ts", DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE(3))
+          .partitionKeys("ts")
+          .build(),
+        false
+      )
+      sql("INSERT INTO dp_millis VALUES (1, TIMESTAMP'2026-01-01 10:00:00.123')")
+
+      val details =
+        partitionDetailsOf(
+          "DESCRIBE FORMATTED dp_millis PARTITION (ts = '2026-01-01 10:00:00.123')")
+      assert(details("Partition Values") == "[ts=2026-01-01 10:00:00.123]", details)
+      assert(recordCountOf(details) == 1, details)
+      // The column cannot hold this value, though it truncates to the stored one.
+      intercept[NoSuchPartitionException] {
+        sql("DESCRIBE FORMATTED dp_millis PARTITION (ts = '2026-01-01 10:00:00.123999')")
+      }
     }
   }
 

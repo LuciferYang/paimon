@@ -198,6 +198,25 @@ trait PaimonPartitionManagement extends SupportsAtomicPartitionManagement with L
   private def toPartitionPredicate(row: InternalRow): PartitionPredicate =
     toPartitionPredicate(toPaimonPartitionValues(Seq(row)))
 
+  /** Whether the first partition values of `row` are those of `ident`. */
+  private def holdsValues(row: InternalRow, ident: InternalRow): Boolean =
+    partitionSchema.fields.take(ident.numFields).zipWithIndex.forall {
+      case (field, i) =>
+        val dataType = CharVarcharUtils.replaceCharVarcharWithString(field.dataType)
+        // `deepEquals`: a BINARY partition value is a `byte[]`.
+        Objects.deepEquals(row.get(i, dataType), ident.get(i, dataType))
+    }
+
+  /**
+   * The spec a catalog lists the partition holding `ident` under, if that spec parses back to
+   * `ident`. A blank string, for one, is listed under the default partition name, which parses back
+   * as NULL.
+   */
+  def catalogPartitionSpec(ident: InternalRow): Option[JMap[String, String]] = {
+    val spec = toPaimonPartition(ident, table.partitionKeys().asScala.toSeq.take(ident.numFields))
+    if (columnNotParsedBack(ident, spec).isEmpty) Some(spec) else None
+  }
+
   /** The specs of the partitions to drop by name; each must address its own partition. */
   private def toRemovedPaimonPartitions(rows: Array[InternalRow]): Array[JMap[String, String]] = {
     val specs = toPaimonPartitions(rows)
@@ -318,7 +337,12 @@ trait PaimonPartitionManagement extends SupportsAtomicPartitionManagement with L
           .withPartitionFilter(toPartitionPredicate(ident))
           .listPartitionEntries()
           .asScala
-          .headOption
+          // The filter compares a timestamp at its column's precision, so it also matches a value
+          // the column cannot hold. Compare exactly, as listPartitionIdentifiers does.
+          .find {
+            entry =>
+              holdsValues(DataConverter.fromPaimon(entry.partition(), partitionRowType), ident)
+          }
 
         partitionEntry match {
           case Some(entry) =>
