@@ -18,8 +18,10 @@
 
 package org.apache.spark.sql.execution
 
+import org.apache.paimon.catalog.DelegateCatalog
 import org.apache.paimon.options.Options
 import org.apache.paimon.partition.PartitionStatistics
+import org.apache.paimon.rest.RESTCatalog
 import org.apache.paimon.spark.SparkTable
 import org.apache.paimon.spark.catalog.SparkBaseCatalog
 import org.apache.paimon.spark.catalyst.Compatibility
@@ -97,12 +99,14 @@ case class PaimonDescribeTableExec(
   }
 
   /**
-   * Whether the catalog lists the partition, as a REST catalog lists one registered before its
-   * first write. Asked only for a table partitioned in the metastore, and not under time travel:
-   * the catalog lists the partitions of the current snapshot.
+   * Whether a REST catalog lists the partition, as it lists one registered before its first write.
+   * Other catalogs list partitions by scanning the table, as loadPartitionMetadata already did.
+   * Asked only for a table partitioned in the metastore, and not under time travel: the catalog
+   * lists the partitions of the current snapshot.
    */
   private def isRegistered(fileStoreTable: FileStoreTable, spec: ResolvedPartitionSpec): Boolean =
-    fileStoreTable.coreOptions().partitionedTableInMetastore() &&
+    DelegateCatalog.rootCatalog(catalog.paimonCatalog()).isInstanceOf[RESTCatalog] &&
+      fileStoreTable.coreOptions().partitionedTableInMetastore() &&
       !TimeTravelUtil.hasTimeTravelOptions(Options.fromMap(fileStoreTable.options())) &&
       table.catalogPartitionSpec(spec.ident).exists {
         partitionSpec =>

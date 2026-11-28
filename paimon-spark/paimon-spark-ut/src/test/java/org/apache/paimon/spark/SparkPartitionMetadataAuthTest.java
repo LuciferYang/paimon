@@ -412,6 +412,9 @@ public class SparkPartitionMetadataAuthTest {
             throws IOException {
         try (SparkSession spark = createSession(warehouse)) {
             createTable(spark, false);
+            // DESCRIBE asks only a REST catalog for registered partitions, even for a table
+            // partitioned in the metastore.
+            spark.sql("ALTER TABLE T SET TBLPROPERTIES ('metastore.partitioned-table' = 'true')");
             setPolicy(spark, false, "no-rules", "region,dt");
             // Finding a partition by its values reads no column other than its keys. EXTENDED is
             // left out: on Spark 4 it also reports table statistics, which plan a full scan.
